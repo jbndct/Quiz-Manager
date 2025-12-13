@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // appState now holds local quizzes AND progress for all quizzes
     let appState = {
-        localQuizzes: [], // Stores full quiz definitions { id, name, quizData }
+        localQuizzes: [], // Stores full quiz definitions { id, name, quizData, createdAt }
         quizProgress: []  // Stores progress { id, currentQuestionIndex, ... }
     };
     
@@ -36,6 +36,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentLoadTab = 'json'; // 'json' or 'text'
     let currentExtractTab = 'json'; // 'json' or 'text'
     let isAdmin = false; // Flag for admin delete privileges
+    
+    // NEW: Editing, Sorting, Search State
+    let editingQuizId = null; // ID of the quiz currently being edited (null = creating new)
+    let editingMode = 'local'; // 'local' or 'public'
+    let currentSort = 'date-desc'; // Default sort order
+    let currentSearchTerm = ''; // Default search term
     
     // --- ELEMENT REFERENCES ---
     // Containers
@@ -53,8 +59,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const publicQuizList = document.getElementById('public-quiz-list'); // Public quizzes
     const noPublicQuizzesMessage = document.getElementById('no-public-quizzes-message');
     const loadNewQuizBtn = document.getElementById('load-new-quiz-btn');
+    const sortSelect = document.getElementById('sort-select'); // Sort Dropdown
+    const searchInput = document.getElementById('search-input'); // Search Input
 
     // Screen 2: Setup
+    const setupTitle = document.getElementById('setup-title');
     const backToListBtn = document.getElementById('back-to-list-btn');
     const tabBtnJson = document.getElementById('tab-btn-json');
     const tabBtnText = document.getElementById('tab-btn-text');
@@ -66,8 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const simpleTextInput = document.getElementById('simple-text-input');
     const loadQuizBtn = document.getElementById('load-quiz-btn');
     const setupError = document.getElementById('setup-error');
-    // *** NEW ELEMENT REFERENCE ***
     const publicCheckbox = document.getElementById('public-checkbox');
+    const publicCheckboxContainer = document.getElementById('public-checkbox-container');
     const quizNameInput = document.getElementById('quiz-name-input');
 
     // Screen 3: Quiz
@@ -157,7 +166,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- NEW: Functions to manage local quiz definitions ---
     function saveLocalQuiz(quizDefinition) {
-        appState.localQuizzes.push(quizDefinition);
+        const existingIndex = appState.localQuizzes.findIndex(q => q.id === quizDefinition.id);
+        if (existingIndex !== -1) {
+            // Update existing
+            appState.localQuizzes[existingIndex] = quizDefinition;
+        } else {
+            // Add new
+            appState.localQuizzes.push(quizDefinition);
+        }
         saveStateToStorage();
     }
 
@@ -174,28 +190,65 @@ document.addEventListener('DOMContentLoaded', () => {
     function showScreen(screenKey) {
         for (const key in screenContainers) {
             if (key === screenKey) {
-                screenContainers[key].classList.remove('hidden');
+                screenContainers[key].classList.remove('d-none');
             } else {
-                screenContainers[key].classList.add('hidden');
+                screenContainers[key].classList.add('d-none');
             }
         }
     }
 
     // --- SCREEN 1: QUIZ LIST LOGIC ---
     
+    // NEW: Sorting Helper
+    function sortQuizzes(quizzes) {
+        return quizzes.sort((a, b) => {
+            if (currentSort === 'name-asc') {
+                return a.name.localeCompare(b.name);
+            } else if (currentSort === 'name-desc') {
+                return b.name.localeCompare(a.name);
+            } else if (currentSort === 'date-asc') {
+                const dateA = a.createdAt || 0;
+                const dateB = b.createdAt || 0;
+                return dateA - dateB;
+            } else { // date-desc (default)
+                const dateA = a.createdAt || 0;
+                const dateB = b.createdAt || 0;
+                return dateB - dateA;
+            }
+        });
+    }
+
+    // NEW: Search Filter Helper
+    function filterQuizzes(quizzes) {
+        if (!currentSearchTerm) return quizzes;
+        const term = currentSearchTerm.toLowerCase();
+        return quizzes.filter(q => q.name.toLowerCase().includes(term));
+    }
+
     // --- Render *Local* Quizzes ---
     function renderLocalQuizzes() {
         activeQuizList.innerHTML = ''; // Clear local list
-        const localQuizzes = appState.localQuizzes;
+        let localQuizzes = [...appState.localQuizzes]; // Create copy to sort/filter
 
+        // 1. Filter
+        localQuizzes = filterQuizzes(localQuizzes);
+        
         if (localQuizzes.length === 0) {
-            noQuizzesMessage.classList.remove('hidden'); // Show "You have no active quizzes"
+            if (currentSearchTerm) {
+               activeQuizList.innerHTML = `<div class="text-center text-muted p-3 border border-secondary rounded bg-dark">No local quizzes match "${currentSearchTerm}"</div>`;
+               noQuizzesMessage.classList.add('d-none');
+            } else {
+               noQuizzesMessage.classList.remove('d-none'); // Show "You have no active quizzes"
+            }
         } else {
-            noQuizzesMessage.classList.add('hidden');
+            noQuizzesMessage.classList.add('d-none');
+            
+            // 2. Sort
+            localQuizzes = sortQuizzes(localQuizzes);
             
             localQuizzes.forEach(localQuiz => {
                 const quizItem = document.createElement('div');
-                quizItem.className = 'bg-gray-800 p-4 rounded-lg shadow-lg ring-1 ring-gray-700/50';
+                quizItem.className = 'card bg-dark border-secondary shadow-sm';
                 
                 const totalQuestions = localQuiz.quizData.length;
                 
@@ -204,7 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 let progressText = '';
                 let buttonText = 'Start';
-                let buttonIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+                let buttonClass = 'btn-primary';
                 let isFinished = false;
 
                 if (localProgress) {
@@ -214,7 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (isFinished) {
                         progressText = `Finished! (Score: ${localProgress.score})`;
                         buttonText = 'Review';
-                        buttonIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>';
+                        buttonClass = 'btn-info text-white';
                     } else {
                         progressText = `Progress: ${localProgress.currentQuestionIndex} / ${totalQuestions} (Score: ${localProgress.score})`;
                         buttonText = 'Continue';
@@ -223,36 +276,42 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressText = `Not started (${totalQuestions} questions)`;
                 }
 
-                // Local quiz gets a FULL delete button
+                // Local quiz gets a FULL delete button AND an Edit button
                 quizItem.innerHTML = `
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="font-semibold text-lg text-white" data-id="${localQuiz.id}" data-type="name">${localQuiz.name}</h3>
-                    </div>
-                    <p class="text-sm text-gray-400 mb-3">
-                        ${progressText}
-                    </p>
-                    <div class="flex space-x-2">
-                        <button data-id="${localQuiz.id}" class="continue-btn flex-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                            ${buttonIcon}<span>${buttonText}</span>
-                        </button>
-                        <button data-id="${localQuiz.id}" class="extract-btn bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l-4 4-4-4M6 16l-4-4 4-4" />
-                            </svg>
-                            <span>Extract</span>
-                        </button>
-                        <button data-id="${localQuiz.id}" class="delete-local-btn bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                            <span>Delete Quiz</span>
-                        </button>
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5 class="card-title mb-0 text-light" data-id="${localQuiz.id}" data-type="name">${localQuiz.name}</h5>
+                        </div>
+                        <p class="card-text text-muted small mb-3">
+                            ${progressText}
+                        </p>
+                        <div class="d-flex gap-2">
+                            <button data-id="${localQuiz.id}" class="continue-btn btn ${buttonClass} btn-sm flex-grow-1 d-flex align-items-center justify-content-center">
+                                ${buttonText}
+                            </button>
+                            <!-- NEW EDIT BUTTON -->
+                            <button data-id="${localQuiz.id}" class="edit-btn btn btn-warning btn-sm d-flex align-items-center justify-content-center" title="Edit Quiz">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                            </button>
+                            <button data-id="${localQuiz.id}" class="extract-btn btn btn-secondary btn-sm d-flex align-items-center justify-content-center" title="Extract JSON">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l-4 4-4-4M6 16l-4-4 4-4" />
+                                </svg>
+                            </button>
+                            <button data-id="${localQuiz.id}" class="delete-local-btn btn btn-danger btn-sm d-flex align-items-center justify-content-center" title="Delete">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 `;
                 activeQuizList.appendChild(quizItem);
             });
 
-            // Add event listeners to local quiz buttons
+            // Add event listeners
             activeQuizList.querySelectorAll('.continue-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => startQuiz(e.currentTarget.dataset.id));
             });
@@ -260,28 +319,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.addEventListener('click', (e) => {
                     if (confirm('Are you sure you want to permanently delete this local quiz?')) {
                         deleteLocalQuiz(e.currentTarget.dataset.id);
-                        renderLocalQuizzes(); // Re-render local list
+                        renderLocalQuizzes(); 
                     }
                 });
             });
             activeQuizList.querySelectorAll('.extract-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => showExtractModal(e.currentTarget.dataset.id));
             });
+            // NEW Edit Listener
+            activeQuizList.querySelectorAll('.edit-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => handleEditLocalQuiz(e.currentTarget.dataset.id));
+            });
         }
     }
 
     // --- Load Public Quizzes from Firebase ---
     async function fetchAndRenderPublicQuizzes() {
-        publicQuizList.innerHTML = '<p class="text-gray-400">Loading public quizzes...</p>';
-        noPublicQuizzesMessage.classList.add('hidden');
+        publicQuizList.innerHTML = '<p class="text-muted">Loading public quizzes...</p>';
+        noPublicQuizzesMessage.classList.add('d-none');
         
-        publicQuizMap.clear(); // Clear the cache
+        publicQuizMap.clear(); 
         let publicQuizzes = [];
         
         try {
             const snapshot = await quizCollection.get();
             if (snapshot.empty) {
-                noPublicQuizzesMessage.classList.remove('hidden');
+                noPublicQuizzesMessage.classList.remove('d-none');
                 publicQuizList.innerHTML = '';
                 return;
             }
@@ -292,44 +355,56 @@ document.addEventListener('DOMContentLoaded', () => {
                     publicQuizzes.push({
                         id: doc.id,
                         name: quizData.name,
-                        quizData: quizData.quizData
+                        quizData: quizData.quizData,
+                        createdAt: quizData.createdAt ? quizData.createdAt.toMillis() : 0 // Handle timestamp
                     });
                     publicQuizMap.set(doc.id, {
                         id: doc.id,
                         name: quizData.name,
-                        quizData: quizData.quizData
+                        quizData: quizData.quizData,
+                        createdAt: quizData.createdAt ? quizData.createdAt.toMillis() : 0
                     });
                 }
             });
             
-            renderPublicQuizList(publicQuizzes); // Pass to new render function
+            renderPublicQuizList(publicQuizzes);
             
         } catch (error) {
             console.error("Error loading public quizzes:", error);
-            publicQuizList.innerHTML = '<p class="text-red-400">Error loading public quizzes. Check console.</p>';
-            noPublicQuizzesMessage.classList.remove('hidden');
+            publicQuizList.innerHTML = '<p class="text-danger">Error loading public quizzes. Check console.</p>';
+            noPublicQuizzesMessage.classList.remove('d-none');
         }
     }
 
     // --- Render *Public* Quiz List ---
     function renderPublicQuizList(publicQuizzes) {
-        publicQuizList.innerHTML = ''; // Clear existing list
+        publicQuizList.innerHTML = ''; 
         
+        // 1. Filter
+        publicQuizzes = filterQuizzes(publicQuizzes);
+
         if (publicQuizzes.length === 0) {
-            noPublicQuizzesMessage.classList.remove('hidden');
+             if (currentSearchTerm) {
+                publicQuizList.innerHTML = `<div class="text-center text-muted p-3 border border-secondary rounded bg-dark">No public quizzes match "${currentSearchTerm}"</div>`;
+            } else {
+                noPublicQuizzesMessage.classList.remove('d-none');
+            }
         } else {
-            noPublicQuizzesMessage.classList.add('hidden');
+            noPublicQuizzesMessage.classList.add('d-none');
             
+            // 2. Sort
+            publicQuizzes = sortQuizzes(publicQuizzes);
+
             publicQuizzes.forEach(publicQuiz => {
                 const quizItem = document.createElement('div');
-                quizItem.className = 'bg-gray-800 p-4 rounded-lg shadow-lg ring-1 ring-gray-700/50';
+                quizItem.className = 'card bg-dark border-secondary shadow-sm';
                 
                 const totalQuestions = publicQuiz.quizData.length;
                 const localProgress = appState.quizProgress.find(q => q.id === publicQuiz.id);
                 
                 let progressText = '';
                 let buttonText = 'Start';
-                let buttonIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
+                let buttonClass = 'btn-primary';
                 let isFinished = false;
 
                 if (localProgress) {
@@ -339,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (isFinished) {
                         progressText = `Finished! (Score: ${localProgress.score})`;
                         buttonText = 'Review';
-                        buttonIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round"d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>';
+                        buttonClass = 'btn-info text-white';
                     } else {
                         progressText = `Progress: ${localProgress.currentQuestionIndex} / ${totalQuestions} (Score: ${localProgress.score})`;
                         buttonText = 'Continue';
@@ -348,72 +423,84 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressText = `Not started (${totalQuestions} questions)`;
                 }
 
-                // --- Admin Delete Button ---
+                // --- Admin Buttons ---
                 const adminDeleteButton = `
-                    <button data-id="${publicQuiz.id}" class="delete-public-btn bg-red-800 hover:bg-red-700 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    <button data-id="${publicQuiz.id}" class="delete-public-btn btn btn-danger btn-sm d-flex align-items-center justify-content-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                           <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                         </svg>
-                        <span>ADMIN DELETE</span>
+                        <span class="ms-1">ADMIN DELETE</span>
+                    </button>
+                `;
+
+                // NEW: Admin Edit Button
+                const adminEditButton = `
+                     <button data-id="${publicQuiz.id}" class="edit-public-btn btn btn-warning btn-sm d-flex align-items-center justify-content-center" title="Admin Edit">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
                     </button>
                 `;
 
                 quizItem.innerHTML = `
-                    <div class="flex items-center justify-between mb-2">
-                        <h3 class="font-semibold text-lg text-white" data-id="${publicQuiz.id}" data-type="name">${publicQuiz.name}</h3>
-                    </div>
-                    <p class="text-sm text-gray-400 mb-3">
-                        ${progressText}
-                    </p>
-                    <div class="flex space-x-2">
-                        <button data-id="${publicQuiz.id}" class="continue-btn flex-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                            ${buttonIcon}<span>${buttonText}</span>
-                        </button>
-                        <button data-id="${publicQuiz.id}" class="extract-btn bg-gray-600 hover:bg-gray-500 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l-4 4-4-4M6 16l-4-4 4-4" />
-                            </svg>
-                            <span>Extract</span>
-                        </button>
-                        <button data-id="${publicQuiz.id}" class="delete-progress-btn bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center space-x-2 ${!localProgress ? 'hidden' : ''}">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                            <span>Delete Progress</span>
-                        </button>
-                        ${isAdmin ? adminDeleteButton : ''} 
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5 class="card-title mb-0 text-light" data-id="${publicQuiz.id}" data-type="name">${publicQuiz.name}</h5>
+                        </div>
+                        <p class="card-text text-muted small mb-3">
+                            ${progressText}
+                        </p>
+                        <div class="d-flex gap-2">
+                            <button data-id="${publicQuiz.id}" class="continue-btn btn ${buttonClass} btn-sm flex-grow-1 d-flex align-items-center justify-content-center">
+                                ${buttonText}
+                            </button>
+                            ${isAdmin ? adminEditButton : ''}
+                            <button data-id="${publicQuiz.id}" class="extract-btn btn btn-secondary btn-sm d-flex align-items-center justify-content-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l-4 4-4-4M6 16l-4-4 4-4" />
+                                </svg>
+                                <span class="ms-1 d-none d-sm-inline">Extract</span>
+                            </button>
+                            <button data-id="${publicQuiz.id}" class="delete-progress-btn btn btn-danger btn-sm d-flex align-items-center justify-content-center ${!localProgress ? 'd-none' : ''}">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                <span class="ms-1 d-none d-sm-inline">Reset</span>
+                            </button>
+                            ${isAdmin ? adminDeleteButton : ''} 
+                        </div>
                     </div>
                 `;
                 publicQuizList.appendChild(quizItem);
             });
 
-            // Add event listeners to public quiz buttons
+            // Event Listeners
             publicQuizList.querySelectorAll('.continue-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => startQuiz(e.currentTarget.dataset.id));
             });
             publicQuizList.querySelectorAll('.delete-progress-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     deleteQuizProgress(e.currentTarget.dataset.id);
-                    fetchAndRenderPublicQuizzes(); // Re-render public list
+                    fetchAndRenderPublicQuizzes();
                 });
             });
             publicQuizList.querySelectorAll('.extract-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => showExtractModal(e.currentTarget.dataset.id));
             });
 
-            // --- Admin Delete Listener ---
+            // Admin Actions
             if (isAdmin) {
+                // Delete
                 publicQuizList.querySelectorAll('.delete-public-btn').forEach(btn => {
                     btn.addEventListener('click', async (e) => {
                         const quizId = e.currentTarget.dataset.id;
-                        if (confirm(`ADMIN: Are you sure you want to permanently delete this PUBLIC quiz (${quizId}) from Firebase? This cannot be undone.`)) {
+                        if (confirm(`ADMIN: Are you sure you want to permanently delete this PUBLIC quiz (${quizId}) from Firebase?`)) {
                             try {
-                                btn.textContent = 'Deleting...';
+                                btn.textContent = '...';
                                 btn.disabled = true;
                                 await quizCollection.doc(quizId).delete();
-                                console.log("Admin deleted quiz:", quizId);
-                                deleteQuizProgress(quizId); // Also delete local progress
-                                fetchAndRenderPublicQuizzes(); // Refresh list
+                                deleteQuizProgress(quizId); 
+                                fetchAndRenderPublicQuizzes(); 
                             } catch (error) {
                                 console.error("Error admin-deleting quiz:", error);
                                 alert("Error deleting quiz. Check console.");
@@ -423,6 +510,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     });
                 });
+
+                // Edit
+                publicQuizList.querySelectorAll('.edit-public-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => handleEditPublicQuiz(e.currentTarget.dataset.id));
+                });
             }
         }
     }
@@ -430,24 +522,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- SCREEN 2: SETUP LOGIC ---
 
     function switchSetupTab(tab) {
-        // (Unchanged)
         currentLoadTab = tab;
         if (tab === 'json') {
-            tabBtnJson.classList.add('text-white', 'border-blue-500');
-            tabBtnJson.classList.remove('text-gray-400', 'border-transparent');
-            tabBtnText.classList.add('text-gray-400', 'border-transparent');
-            tabBtnText.classList.remove('text-white', 'border-blue-500');
+            tabBtnJson.classList.add('active', 'text-primary');
+            tabBtnJson.classList.remove('text-secondary');
+            tabBtnText.classList.remove('active', 'text-primary');
+            tabBtnText.classList.add('text-secondary');
             
-            tabContentJson.classList.remove('hidden');
-            tabContentText.classList.add('hidden');
+            tabContentJson.classList.remove('d-none');
+            tabContentText.classList.add('d-none');
         } else {
-            tabBtnText.classList.add('text-white', 'border-blue-500');
-            tabBtnText.classList.remove('text-gray-400', 'border-transparent');
-            tabBtnJson.classList.add('text-gray-400', 'border-transparent');
-            tabBtnJson.classList.remove('text-white', 'border-blue-500');
+            tabBtnText.classList.add('active', 'text-primary');
+            tabBtnText.classList.remove('text-secondary');
+            tabBtnJson.classList.remove('active', 'text-primary');
+            tabBtnJson.classList.add('text-secondary');
 
-            tabContentText.classList.remove('hidden');
-            tabContentJson.classList.add('hidden');
+            tabContentText.classList.remove('d-none');
+            tabContentJson.classList.add('d-none');
         }
     }
     
@@ -455,7 +546,6 @@ document.addEventListener('DOMContentLoaded', () => {
     tabBtnText.addEventListener('click', () => switchSetupTab('text'));
     
     fileInput.addEventListener('change', (e) => {
-        // (Unchanged)
         const file = e.target.files[0];
         if (file) {
             fileNameDisplay.textContent = file.name;
@@ -466,25 +556,68 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- *** MODIFIED: loadQuizBtn (Now saves LOCALLY or PUBLICLY) *** ---
+    // Handle Editing Local
+    function handleEditLocalQuiz(quizId) {
+        const quiz = appState.localQuizzes.find(q => q.id === quizId);
+        if (!quiz) return;
+
+        prepareEditForm(quizId, quiz.name, quiz.quizData, 'local');
+    }
+
+    // Handle Editing Public (Admin)
+    function handleEditPublicQuiz(quizId) {
+        const quiz = publicQuizMap.get(quizId);
+        if (!quiz) return;
+
+        prepareEditForm(quizId, quiz.name, quiz.quizData, 'public');
+    }
+
+    // Helper to prep form
+    function prepareEditForm(id, name, data, mode) {
+        editingQuizId = id;
+        editingMode = mode;
+        
+        // Pre-fill fields
+        quizNameInput.value = name;
+        jsonTextInput.value = JSON.stringify(data, null, 2);
+        
+        // Hide Public option (we lock the type when editing)
+        publicCheckbox.checked = (mode === 'public');
+        publicCheckboxContainer.classList.add('d-none');
+
+        // UI Updates
+        setupTitle.textContent = mode === 'public' ? "Edit Public Quiz (Admin)" : "Edit Local Quiz";
+        loadQuizBtn.textContent = "Save Changes";
+        loadQuizBtn.classList.remove('btn-success');
+        loadQuizBtn.classList.add('btn-warning');
+        
+        // Switch to JSON tab by default
+        switchSetupTab('json');
+        
+        showScreen('setup');
+    }
+
     loadQuizBtn.addEventListener('click', async () => {
         loadQuizBtn.disabled = true;
         
-        // --- NEW: Checkbox logic ---
+        // Determine mode
+        const isEditing = editingQuizId !== null;
         const isPublic = publicCheckbox.checked;
-        loadQuizBtn.textContent = isPublic ? 'Saving to Public Library...' : 'Saving locally...';
-        // ---
 
-        let quizName = ""; // Declared here
+        if (isEditing) {
+            loadQuizBtn.textContent = 'Saving Changes...';
+        } else {
+            loadQuizBtn.textContent = isPublic ? 'Saving to Public Library...' : 'Saving locally...';
+        }
+
+        let quizName = ""; 
         let quizData = null;
 
         try {
-            // --- NEW: Get Quiz Name from input ---
             quizName = quizNameInput.value.trim();
             if (!quizName) {
                 throw new Error('Please enter a name for your quiz.');
             }
-            // ---
 
             if (currentLoadTab === 'json') {
                 const file = fileInput.files[0];
@@ -498,7 +631,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     throw new Error('Please paste JSON data or upload a file.');
                 }
-            } else { // 'text' tab
+            } else { 
                 const simpleText = simpleTextInput.value;
                 if (!simpleText) {
                     throw new Error('Please paste your simple text data.');
@@ -508,69 +641,120 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (validateQuizData(quizData)) {
                 
-                let newQuizId;
-                
-                // --- NEW: Conditional Save ---
-                if (isPublic) {
-                    // Save to Firebase
-                    const newPublicQuiz = {
-                        name: quizName,
-                        quizData: quizData
-                    };
-                    const docRef = await quizCollection.add(newPublicQuiz);
-                    newQuizId = docRef.id; // Use the ID from Firebase
-                    console.log("Quiz saved to Firebase with ID:", newQuizId);
+                if (isEditing) {
+                    // --- UPDATE EXISTING QUIZ ---
+                    
+                    if (editingMode === 'public') {
+                        // Admin updating Firebase
+                        if (!isAdmin) throw new Error("Unauthorized to edit public quiz.");
+                        
+                        await quizCollection.doc(editingQuizId).update({
+                            name: quizName,
+                            quizData: quizData
+                            // We don't update createdAt so sorting stays consistent, or we could add updatedAt
+                        });
+                        
+                        // We do NOT reset progress for public quizzes automatically to avoid frustrating users,
+                        // but realize that if questions changed, their progress might be buggy.
+                        // For a simple app, this is acceptable. 
+                        
+                        // Refresh to show changes
+                        fetchAndRenderPublicQuizzes();
+                        
+                    } else {
+                        // Local Update
+                        const updatedQuiz = { 
+                            id: editingQuizId, 
+                            name: quizName, 
+                            quizData: quizData,
+                            createdAt: Date.now() 
+                        };
+                        
+                        // Reset progress for local because it's just one user
+                        deleteQuizProgress(editingQuizId);
+                        saveLocalQuiz(updatedQuiz);
+                        refreshAllLists();
+                    }
+                    
+                    // Reset editing state
+                    editingQuizId = null;
+                    editingMode = 'local';
+                    showScreen('list');
+                    
                 } else {
-                    // Save Locally
-                    newQuizId = `local_${Date.now()}`;
-                    const newLocalQuiz = {
-                        id: newQuizId,
-                        name: quizName,
-                        quizData: quizData
-                    };
-                    saveLocalQuiz(newLocalQuiz); // Saves to appState.localQuizzes
+                    // --- CREATE NEW QUIZ ---
+                    if (isPublic) {
+                        const newPublicQuiz = { 
+                            name: quizName, 
+                            quizData: quizData,
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp() // Add timestamp for sorting
+                        };
+                        const docRef = await quizCollection.add(newPublicQuiz);
+                        fetchAndRenderPublicQuizzes();
+                        showScreen('list');
+                    } else {
+                        const newQuizId = `local_${Date.now()}`;
+                        const newLocalQuiz = { 
+                            id: newQuizId, 
+                            name: quizName, 
+                            quizData: quizData,
+                            createdAt: Date.now() // Save timestamp for sorting
+                        };
+                        saveLocalQuiz(newLocalQuiz); 
+                        
+                        // Initialize progress for immediate start
+                        const newQuizProgress = {
+                            id: newQuizId, 
+                            currentQuestionIndex: 0,
+                            score: 0,
+                            userAnswers: new Array(quizData.length).fill(null),
+                            visited: new Array(quizData.length).fill(false),
+                            reviewingSkipped: false
+                        };
+                        appState.quizProgress.push(newQuizProgress);
+                        saveStateToStorage();
+                        
+                        startQuiz(newQuizId); 
+                    }
                 }
-                // ---
-                
-                // Create the local progress (for *both* types)
-                const newQuizProgress = {
-                    id: newQuizId, // Use the new ID (local or public)
-                    currentQuestionIndex: 0,
-                    score: 0,
-                    userAnswers: new Array(quizData.length).fill(null),
-                    visited: new Array(quizData.length).fill(false),
-                    reviewingSkipped: false
-                };
-                
-                appState.quizProgress.push(newQuizProgress);
-                saveStateToStorage();
                 
                 resetSetupForm();
-                startQuiz(newQuizId); // Start the quiz
 
             } else {
                 throw new Error('Invalid quiz data structure.');
             }
         } catch (error) {
+            console.error(error);
             showSetupError(error.message);
         } finally {
             loadQuizBtn.disabled = false;
-            loadQuizBtn.textContent = 'Create Quiz'; // Reset button text
+            // Reset button text default
+            if (!editingQuizId) {
+                loadQuizBtn.textContent = 'Create Quiz';
+            }
         }
     });
-    // --- *** MODIFIED: resetSetupForm (resets checkbox and new name input) *** ---
+    
     function resetSetupForm() {
         jsonTextInput.value = '';
         simpleTextInput.value = '';
         fileInput.value = null;
         fileNameDisplay.textContent = 'No file chosen';
-        setupError.classList.add('hidden');
-        publicCheckbox.checked = false; // Reset the checkbox
-        quizNameInput.value = ''; // *** NEW: Reset the name input ***
+        setupError.classList.add('d-none');
+        publicCheckbox.checked = false; 
+        quizNameInput.value = '';
+        
+        // Reset Editing UI
+        editingQuizId = null;
+        editingMode = 'local';
+        setupTitle.textContent = "Load New Quiz";
+        publicCheckboxContainer.classList.remove('d-none');
+        loadQuizBtn.classList.remove('btn-warning');
+        loadQuizBtn.classList.add('btn-success');
+        loadQuizBtn.textContent = 'Create Quiz';
     }
 
     function parseSimpleText(text) {
-        // (Unchanged)
         const questionBlocks = text.trim().split(/\n\s*\n/);
         const quizData = [];
 
@@ -593,6 +777,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (questionText && options.length > 1 && correctAnswerIndex !== -1) {
                 quizData.push({
+                    type: 'multiple-choice', 
                     questionText,
                     options,
                     correctAnswerIndex
@@ -607,45 +792,58 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function showSetupError(message) {
-        // (Unchanged)
         setupError.textContent = message;
-        setupError.classList.remove('hidden');
+        setupError.classList.remove('d-none');
     }
 
     function validateQuizData(data) {
-        // (Unchanged)
         if (!Array.isArray(data) || data.length === 0) return false;
-        const firstQuestion = data[0];
-        return firstQuestion.hasOwnProperty('questionText') &&
-               firstQuestion.hasOwnProperty('options') &&
-               Array.isArray(firstQuestion.options) &&
-               firstQuestion.hasOwnProperty('correctAnswerIndex') &&
-               typeof firstQuestion.correctAnswerIndex === 'number';
+        
+        return data.every(q => {
+            const type = q.type || 'multiple-choice';
+            
+            if (!q.hasOwnProperty('questionText')) return false;
+
+            if (type === 'multiple-choice') {
+                return q.hasOwnProperty('options') &&
+                       Array.isArray(q.options) &&
+                       q.hasOwnProperty('correctAnswerIndex') &&
+                       typeof q.correctAnswerIndex === 'number';
+            } else if (type === 'identification') {
+                return q.hasOwnProperty('correctAnswer') && typeof q.correctAnswer === 'string';
+            } else if (type === 'enumeration') {
+                return q.hasOwnProperty('correctAnswers') && 
+                       Array.isArray(q.correctAnswers) &&
+                       q.correctAnswers.length > 0;
+            }
+            return false; 
+        });
     }
 
 
     // --- SCREEN 3: QUIZ LOGIC ---
 
-    // --- MODIFIED: startQuiz (Handles local and public IDs) ---
     async function startQuiz(quizId) {
         let quizDefinition = null;
 
         // Step 1: Get the Quiz Definition
         if (quizId.startsWith('local_')) {
-            // It's a local quiz
             quizDefinition = appState.localQuizzes.find(q => q.id === quizId);
         } else {
-            // It's a public (Firebase) quiz
             quizDefinition = publicQuizMap.get(quizId);
             if (!quizDefinition) {
                 try {
                     const doc = await quizCollection.doc(quizId).get();
                     if (doc.exists) {
-                        quizDefinition = { id: doc.id, ...doc.data() };
+                        const data = doc.data();
+                        quizDefinition = { 
+                            id: doc.id, 
+                            ...data,
+                            createdAt: data.createdAt ? data.createdAt.toMillis() : 0 
+                        };
                         publicQuizMap.set(quizId, quizDefinition);
                     } else {
-                        console.error("No public quiz found with that ID!");
-                        // Progress is orphaned. Delete it.
+                        console.error("No public quiz found!");
                         deleteQuizProgress(quizId);
                         renderLocalQuizzes();
                         fetchAndRenderPublicQuizzes();
@@ -653,7 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         return;
                     }
                 } catch (err) {
-                    console.error("Error fetching quiz definition:", err);
+                    console.error("Error fetching quiz:", err);
                     showScreen('list');
                     return;
                 }
@@ -661,16 +859,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!quizDefinition) {
-             console.error("Could not find quiz definition for ID:", quizId);
              showScreen('list');
              return;
         }
 
-        // Step 2: Find or create the Local Progress
+        // Step 2: Find or create progress
         let quizProgress = appState.quizProgress.find(q => q.id === quizId);
         
         if (!quizProgress) {
-            // User hasn't started this quiz. Create a new progress object.
             quizProgress = {
                 id: quizId,
                 currentQuestionIndex: 0,
@@ -683,7 +879,6 @@ document.addEventListener('DOMContentLoaded', () => {
             saveStateToStorage();
         }
         
-        // Step 3: Check if this quiz is finished
         const answeredCount = quizProgress.userAnswers.filter(a => a !== null).length;
         const isFinished = answeredCount === quizDefinition.quizData.length;
         
@@ -693,7 +888,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Step 4: Show the quiz screen
         currentQuizId = quizId;
         
         quizTitle.textContent = quizDefinition.name;
@@ -704,7 +898,6 @@ document.addEventListener('DOMContentLoaded', () => {
         displayQuestion();
     }
 
-    // --- MODIFIED: Helper function to get the current quiz ---
     function getCurrentQuiz() {
         if (!currentQuizId) return null;
         
@@ -718,15 +911,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         if (!progress || !definition) {
-            console.error("Could not find quiz state for ID:", currentQuizId);
-            // This can happen if quiz was deleted from another tab or by admin
             return null;
         }
         
         return { progress, definition };
     }
 
-    // --- MODIFIED: updateProgressBar (Uses new helper) ---
     function updateProgressBar() {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
@@ -736,11 +926,10 @@ document.addEventListener('DOMContentLoaded', () => {
         progressBar.style.width = `${percent}%`;
     }
 
-    // --- MODIFIED: displayQuestion (Uses new helper) ---
+    // --- MODIFIED: displayQuestion (Bootstrap Styling) ---
     function displayQuestion() {
         const quiz = getCurrentQuiz();
         if (!quiz) {
-            // Quiz data is missing (e.g., deleted), boot to list
             renderLocalQuizzes();
             fetchAndRenderPublicQuizzes();
             showScreen('list');
@@ -749,129 +938,331 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const { progress, definition } = quiz;
         
-        // (rest of function is unchanged)
-        
+        // Safety check if quiz definition changed length (edited)
         if (progress.visited.length !== definition.quizData.length) {
-            progress.visited = new Array(definition.quizData.length).fill(false);
-            progress.userAnswers.forEach((a, i) => { 
-                if (a !== null) progress.visited[i] = true;
-            });
+            // Resize arrays
+            const newLen = definition.quizData.length;
+            const oldLen = progress.userAnswers.length;
+            
+            if (newLen > oldLen) {
+                // Grow
+                for(let i=oldLen; i<newLen; i++) {
+                    progress.userAnswers.push(null);
+                    progress.visited.push(false);
+                }
+            } else {
+                // Shrink
+                progress.userAnswers = progress.userAnswers.slice(0, newLen);
+                progress.visited = progress.visited.slice(0, newLen);
+                if (progress.currentQuestionIndex >= newLen) {
+                    progress.currentQuestionIndex = newLen - 1;
+                }
+            }
         }
         
         progress.visited[progress.currentQuestionIndex] = true;
         const question = definition.quizData[progress.currentQuestionIndex];
+        const type = question.type || 'multiple-choice';
+
         updateProgressBar();
         questionText.textContent = question.questionText;
         questionCounter.textContent = progress.currentQuestionIndex + 1;
         currentScore.textContent = progress.score;
+        
         optionsContainer.innerHTML = '';
         feedbackMessage.textContent = '';
-        feedbackMessage.className = 'text-center text-lg font-semibold min-h-[30px] mb-4';
+        feedbackMessage.className = 'text-center fw-bold fs-5 my-3';
         quizContainer.classList.remove('shake', 'pop');
         
         if (progress.reviewingSkipped) {
-            skippedModeBanner.classList.remove('hidden');
+            skippedModeBanner.classList.remove('d-none');
         } else {
-            skippedModeBanner.classList.add('hidden');
+            skippedModeBanner.classList.add('d-none');
         }
 
-        question.options.forEach((option, index) => {
-            const button = document.createElement('button');
-            button.textContent = `${index + 1}. ${option}`;
-            button.dataset.index = index;
-            button.className = "w-full text-left p-4 bg-gray-700 hover:bg-gray-600 rounded-md transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-md";
-            button.addEventListener('click', handleOptionClick);
-            optionsContainer.appendChild(button);
-        });
-        
-        skipQuestionBtn.textContent = 'Skip';
         const existingAnswer = progress.userAnswers[progress.currentQuestionIndex];
-        if (existingAnswer !== null) {
-            showFeedback(existingAnswer, false);
+        const isAnswered = existingAnswer !== null;
+
+        if (type === 'multiple-choice') {
+            question.options.forEach((option, index) => {
+                const button = document.createElement('button');
+                button.textContent = `${index + 1}. ${option}`;
+                button.dataset.index = index;
+                button.className = "btn btn-outline-light text-start p-3 w-100 mb-2 shadow-sm position-relative";
+                
+                if (isAnswered) {
+                    button.disabled = true;
+                    button.style.opacity = "0.8";
+                    if (index === question.correctAnswerIndex) {
+                        button.classList.remove('btn-outline-light');
+                        button.classList.add('btn-success');
+                    } else if (index === existingAnswer) {
+                         button.classList.remove('btn-outline-light');
+                         button.classList.add('btn-danger');
+                    }
+                } else {
+                    button.addEventListener('click', handleOptionClick);
+                }
+                optionsContainer.appendChild(button);
+            });
+
+        } else if (type === 'identification') {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'form-control form-control-lg bg-dark text-light border-secondary mb-3';
+            input.placeholder = 'Type your answer here...';
+            input.id = 'ident-input';
+            
+            const submitBtn = document.createElement('button');
+            submitBtn.textContent = 'Submit Answer';
+            submitBtn.className = 'btn btn-primary w-100 py-2';
+            submitBtn.addEventListener('click', handleIdentificationSubmit);
+
+            if (isAnswered) {
+                input.value = existingAnswer; 
+                input.disabled = true;
+                submitBtn.classList.add('d-none');
+            } else {
+                input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') submitBtn.click();
+                });
+            }
+
+            optionsContainer.appendChild(input);
+            optionsContainer.appendChild(submitBtn);
+
+        } else if (type === 'enumeration') {
+            const count = question.correctAnswers.length;
+            for(let i = 0; i < count; i++) {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'enum-input form-control bg-dark text-light border-secondary mb-2';
+                input.placeholder = `Item ${i + 1}`;
+                input.dataset.index = i;
+                
+                if (isAnswered) {
+                    input.value = existingAnswer[i] || '';
+                    input.disabled = true;
+                }
+                optionsContainer.appendChild(input);
+            }
+            
+            const submitBtn = document.createElement('button');
+            submitBtn.textContent = 'Submit Answers';
+            submitBtn.className = 'btn btn-primary w-100 py-2 mt-2';
+            submitBtn.addEventListener('click', handleEnumerationSubmit);
+            
+            if (isAnswered) {
+                submitBtn.classList.add('d-none');
+            }
+
+            optionsContainer.appendChild(submitBtn);
+        }
+
+        if (isAnswered) {
+             if (type === 'multiple-choice') {
+                 showFeedbackMC(existingAnswer, false); 
+             } else if (type === 'identification') {
+                 showFeedbackIdentification(existingAnswer, false);
+             } else if (type === 'enumeration') {
+                 showFeedbackEnumeration(existingAnswer, false);
+             }
             skipQuestionBtn.disabled = true;
         } else {
-            nextQuestionBtn.classList.add('hidden');
+            nextQuestionBtn.classList.add('d-none');
             skipQuestionBtn.disabled = false;
-            Array.from(optionsContainer.children).forEach(btn => {
-                btn.disabled = false;
-                btn.classList.remove('opacity-70');
-            });
         }
         prevQuestionBtn.disabled = progress.currentQuestionIndex === 0;
     }
 
-    // --- MODIFIED: handleOptionClick (Uses new helper) ---
+    // --- ANSWER HANDLERS ---
+
     function handleOptionClick(e) {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
         
-        // (rest of function is unchanged)
         const { progress, definition } = quiz;
-        const { currentQuestionIndex, quizData } = {
-            currentQuestionIndex: progress.currentQuestionIndex,
-            quizData: definition.quizData
-        };
-        const question = quizData[currentQuestionIndex];
+        const question = definition.quizData[progress.currentQuestionIndex];
         const correctIndex = question.correctAnswerIndex;
         const selectedButton = e.currentTarget;
         const selectedIndex = parseInt(selectedButton.dataset.index);
-        const oldAnswerIndex = progress.userAnswers[currentQuestionIndex];
-        const wasCorrect = (oldAnswerIndex !== null) && (oldAnswerIndex === correctIndex);
+        
         const isCorrect = (selectedIndex === correctIndex);
-        if (!wasCorrect && isCorrect) {
-            progress.score++;
-        } else if (wasCorrect && !isCorrect) {
-            progress.score--;
-        }
-        progress.userAnswers[currentQuestionIndex] = selectedIndex;
+        if (isCorrect) progress.score++;
+
+        progress.userAnswers[progress.currentQuestionIndex] = selectedIndex;
         currentScore.textContent = progress.score;
-        showFeedback(selectedIndex, true);
+        
         updateQuizProgress();
+        showFeedbackMC(selectedIndex, true);
     }
-    
-    // --- MODIFIED: showFeedback (Uses new helper) ---
-    function showFeedback(selectedIndex, withAnimation) {
+
+    function handleIdentificationSubmit() {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
-        
-        // (rest of function is unchanged)
+
+        const input = document.getElementById('ident-input');
+        const userAnswer = input.value.trim();
+        if (!userAnswer) return; 
+
         const { progress, definition } = quiz;
-        const { currentQuestionIndex, quizData } = {
-            currentQuestionIndex: progress.currentQuestionIndex,
-            quizData: definition.quizData
-        };
-        const question = quizData[currentQuestionIndex];
+        const question = definition.quizData[progress.currentQuestionIndex];
+        const correctAnswer = question.correctAnswer;
+
+        const isCorrect = userAnswer.toLowerCase() === correctAnswer.toLowerCase();
+        if (isCorrect) progress.score++;
+
+        progress.userAnswers[progress.currentQuestionIndex] = userAnswer;
+        currentScore.textContent = progress.score;
+
+        updateQuizProgress();
+        showFeedbackIdentification(userAnswer, true);
+    }
+
+    function handleEnumerationSubmit() {
+        const quiz = getCurrentQuiz();
+        if (!quiz) return;
+
+        const inputs = document.querySelectorAll('.enum-input');
+        const userAnswers = Array.from(inputs).map(input => input.value.trim());
+        
+        const { progress, definition } = quiz;
+        const question = definition.quizData[progress.currentQuestionIndex];
+        const correctAnswers = question.correctAnswers; 
+
+        const normUser = userAnswers.map(a => a.toLowerCase());
+        const normCorrect = correctAnswers.map(a => a.toLowerCase());
+
+        let correctCount = 0;
+        normCorrect.forEach(ca => {
+            if (normUser.includes(ca)) correctCount++;
+        });
+
+        const isCorrect = correctCount === correctAnswers.length;
+        if (isCorrect) progress.score++;
+
+        progress.userAnswers[progress.currentQuestionIndex] = userAnswers;
+        currentScore.textContent = progress.score;
+
+        updateQuizProgress();
+        showFeedbackEnumeration(userAnswers, true);
+    }
+    
+    // --- FEEDBACK FUNCTIONS ---
+
+    function showFeedbackMC(selectedIndex, withAnimation) {
+        const quiz = getCurrentQuiz();
+        const { definition, progress } = quiz;
+        const question = definition.quizData[progress.currentQuestionIndex];
         const correctIndex = question.correctAnswerIndex;
         
-        Array.from(optionsContainer.children).forEach(btn => {
+        const buttons = optionsContainer.querySelectorAll('button');
+        buttons.forEach(btn => {
             btn.disabled = true;
-            btn.classList.add('opacity-70');
-            btn.classList.remove('hover:bg-gray-600');
+            btn.style.opacity = "0.8";
+            
+            const idx = parseInt(btn.dataset.index);
+            if (idx === correctIndex) {
+                 btn.classList.remove('btn-outline-light');
+                 btn.classList.add('btn-success');
+            } else if (idx === selectedIndex) {
+                 btn.classList.remove('btn-outline-light');
+                 btn.classList.add('btn-danger');
+            }
         });
 
         if (selectedIndex === correctIndex) {
-            feedbackMessage.textContent = 'Correct!';
-            feedbackMessage.className = 'text-center text-lg font-semibold min-h-[30px] mb-4 text-green-400';
-            optionsContainer.querySelector(`[data-index="${selectedIndex}"]`).classList.add('!bg-green-600', 'text-white', 'ring-2', 'ring-green-400');
+            setFeedbackText('Correct!', true);
             if (withAnimation) quizContainer.classList.add('pop');
         } else {
-            feedbackMessage.textContent = `Wrong! The correct answer was: ${question.options[correctIndex]}`;
-            feedbackMessage.className = 'text-center text-lg font-semibold min-h-[30px] mb-4 text-red-400';
-            optionsContainer.querySelector(`[data-index="${selectedIndex}"]`).classList.add('!bg-red-600', 'text-white', 'ring-2', 'ring-red-400');
-            optionsContainer.querySelector(`[data-index="${correctIndex}"]`).classList.add('!bg-green-600', 'text-white');
+            setFeedbackText(`Wrong! The correct answer was: ${question.options[correctIndex]}`, false);
             if (withAnimation) quizContainer.classList.add('shake');
         }
         
+        finalizeQuestionState();
+    }
+
+    function showFeedbackIdentification(userAnswer, withAnimation) {
+        const quiz = getCurrentQuiz();
+        const { definition, progress } = quiz;
+        const question = definition.quizData[progress.currentQuestionIndex];
+        const correctAnswer = question.correctAnswer;
+
+        const isCorrect = userAnswer.toLowerCase() === correctAnswer.toLowerCase();
+        const input = document.getElementById('ident-input');
+        if (input) {
+            input.disabled = true;
+            if (isCorrect) {
+                input.classList.add('is-valid');
+            } else {
+                input.classList.add('is-invalid');
+            }
+        }
+        
+        const submitBtn = optionsContainer.querySelector('button');
+        if (submitBtn) submitBtn.classList.add('d-none');
+
+        if (isCorrect) {
+            setFeedbackText('Correct!', true);
+            if (withAnimation) quizContainer.classList.add('pop');
+        } else {
+            setFeedbackText(`Wrong! Correct answer: ${correctAnswer}`, false);
+            if (withAnimation) quizContainer.classList.add('shake');
+        }
+
+        finalizeQuestionState();
+    }
+
+    function showFeedbackEnumeration(userAnswers, withAnimation) {
+        const quiz = getCurrentQuiz();
+        const { definition, progress } = quiz;
+        const question = definition.quizData[progress.currentQuestionIndex];
+        const correctAnswers = question.correctAnswers;
+
+        const normCorrect = correctAnswers.map(a => a.toLowerCase());
+
+        const inputs = optionsContainer.querySelectorAll('.enum-input');
+        let allCorrect = true;
+
+        inputs.forEach((input, i) => {
+            input.disabled = true;
+            const val = (userAnswers[i] || '').trim();
+            if (normCorrect.includes(val.toLowerCase())) {
+                input.classList.add('is-valid');
+            } else {
+                input.classList.add('is-invalid');
+                allCorrect = false;
+            }
+        });
+        
+        const submitBtn = optionsContainer.querySelector('button');
+        if(submitBtn) submitBtn.classList.add('d-none');
+
+        if (allCorrect) {
+             setFeedbackText('Correct! You listed them all.', true);
+             if (withAnimation) quizContainer.classList.add('pop');
+        } else {
+             setFeedbackText(`Partially correct or Wrong. Expected: ${correctAnswers.join(', ')}`, false);
+             if (withAnimation) quizContainer.classList.add('shake');
+        }
+        
+        finalizeQuestionState();
+    }
+
+    function setFeedbackText(msg, isSuccess) {
+        feedbackMessage.textContent = msg;
+        feedbackMessage.className = `text-center fw-bold fs-5 my-3 ${isSuccess ? 'text-success' : 'text-danger'}`;
+    }
+
+    function finalizeQuestionState() {
         skipQuestionBtn.disabled = true;
-        nextQuestionBtn.classList.remove('hidden');
+        nextQuestionBtn.classList.remove('d-none');
     }
     
-    // --- MODIFIED: goToNextQuestion (Uses new helper) ---
     function goToNextQuestion() {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
         
-        // (rest of function is unchanged)
         const { progress, definition } = quiz;
         if (progress.reviewingSkipped) {
             let nextSkippedIndex = progress.userAnswers.indexOf(null, progress.currentQuestionIndex + 1);
@@ -911,7 +1302,6 @@ document.addEventListener('DOMContentLoaded', () => {
     nextQuestionBtn.addEventListener('click', goToNextQuestion);
     
     prevQuestionBtn.addEventListener('click', () => {
-        // (Unchanged)
         const quiz = getCurrentQuiz();
         if (!quiz) return;
         if (quiz.progress.currentQuestionIndex > 0) {
@@ -927,7 +1317,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- SCREEN 4: RESULTS LOGIC ---
     
-    // --- MODIFIED: showResults (Uses new helper) ---
     function showResults() {
         const quiz = getCurrentQuiz();
         if (!quiz) {
@@ -937,7 +1326,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // (rest of function is unchanged)
         const { progress, definition } = quiz;
         progress.reviewingSkipped = false;
         updateQuizProgress();
@@ -947,17 +1335,16 @@ document.addEventListener('DOMContentLoaded', () => {
         scoreText.textContent = `${score} / ${quizData.length}`;
         const percentage = (score / quizData.length);
         if (percentage < 0.5) {
-            scoreText.className = 'text-6xl font-extrabold text-red-400 mb-8';
+            scoreText.className = 'display-2 fw-bold mb-5 text-danger';
         } else if (percentage < 0.8) {
-            scoreText.className = 'text-6xl font-extrabold text-yellow-400 mb-8';
+            scoreText.className = 'display-2 fw-bold mb-5 text-warning';
         } else {
-            scoreText.className = 'text-6xl font-extrabold text-green-400 mb-8';
+            scoreText.className = 'display-2 fw-bold mb-5 text-success';
         }
     }
     
     // --- SCREEN 5: REVIEW LOGIC ---
     
-    // --- MODIFIED: renderReviewList (Uses new helper) ---
     function renderReviewList() {
         const quiz = getCurrentQuiz();
         if (!quiz) {
@@ -965,40 +1352,78 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // (rest of function is unchanged)
         const { progress, definition } = quiz;
         reviewList.innerHTML = '';
+        
         definition.quizData.forEach((question, index) => {
-            const userAnswerIndex = progress.userAnswers[index];
-            const correctIndex = question.correctAnswerIndex;
-            let optionsHTML = '';
-            question.options.forEach((option, optIndex) => {
-                let optionClass = 'bg-gray-700';
-                let indicator = '';
-                if (optIndex === correctIndex) {
-                    optionClass = 'bg-green-800/50 border-green-500';
-                    indicator = '<span class="text-green-400 ml-2 font-medium">(Correct)</span>';
+            const userAnswer = progress.userAnswers[index];
+            const type = question.type || 'multiple-choice';
+            let contentHTML = '';
+
+            if (userAnswer === null) {
+                 contentHTML = `<div class="alert alert-warning p-2 mb-2">Skipped</div>`;
+            } else {
+                if (type === 'multiple-choice') {
+                    contentHTML = '<ul class="list-group">';
+                    question.options.forEach((option, optIndex) => {
+                        let listClass = 'list-group-item bg-dark text-light border-secondary';
+                        let indicator = '';
+                        
+                        const isCorrect = (optIndex === question.correctAnswerIndex);
+                        const isSelected = (optIndex === userAnswer);
+
+                        if (isCorrect) {
+                            listClass = 'list-group-item list-group-item-success';
+                            indicator = ' (Correct)';
+                        }
+                        if (isSelected && !isCorrect) {
+                            listClass = 'list-group-item list-group-item-danger';
+                            indicator = ' (Your Answer)';
+                        } else if (isSelected && isCorrect) {
+                            indicator = ' (Your Answer)';
+                        }
+                        contentHTML += `<li class="${listClass}">${option}<span class="fw-bold small">${indicator}</span></li>`;
+                    });
+                    contentHTML += '</ul>';
+                
+                } else if (type === 'identification') {
+                    const isCorrect = userAnswer.toLowerCase() === question.correctAnswer.toLowerCase();
+                    contentHTML = `
+                        <div class="small">
+                            <div class="${isCorrect ? 'text-success' : 'text-danger'} fw-bold">
+                                Your Answer: ${userAnswer}
+                            </div>
+                            ${!isCorrect ? `<div class="text-success">Correct Answer: ${question.correctAnswer}</div>` : ''}
+                        </div>
+                    `;
+                } else if (type === 'enumeration') {
+                    const normCorrect = question.correctAnswers.map(a => a.toLowerCase());
+                    let itemsHTML = '';
+                    
+                    userAnswer.forEach(ans => {
+                        const isItemCorrect = normCorrect.includes(ans.toLowerCase());
+                         itemsHTML += `<span class="badge ${isItemCorrect ? 'text-bg-success' : 'text-bg-danger'} me-1 mb-1">${ans}</span>`;
+                    });
+
+                    contentHTML = `
+                        <div class="small">
+                            <div class="mb-1">You listed:</div>
+                            <div class="mb-2">${itemsHTML}</div>
+                            <div class="text-muted fst-italic">Required: ${question.correctAnswers.join(', ')}</div>
+                        </div>
+                    `;
                 }
-                if (optIndex === userAnswerIndex && userAnswerIndex !== correctIndex) {
-                    optionClass = 'bg-red-800/50 border-red-500';
-                    indicator = '<span class="text-red-400 ml-2 font-medium">(Your Answer)</span>';
-                } else if (optIndex === userAnswerIndex && userAnswerIndex === correctIndex) {
-                    indicator = '<span class="text-green-400 ml-2 font-medium">(Your Answer)</span>';
-                }
-                optionsHTML += `<li class="${optionClass} p-3 rounded-md border-l-4">${option}${indicator}</li>`;
-            });
-            if (userAnswerIndex === null) {
-                 optionsHTML += `<li class="bg-yellow-800/50 border-l-4 border-yellow-500 text-yellow-300 p-3 rounded-md font-medium">You skipped this question.</li>`;
             }
+
             const reviewItem = document.createElement('div');
-            reviewItem.className = 'bg-gray-800 p-4 rounded-lg shadow-lg ring-1 ring-gray-700/50';
+            reviewItem.className = 'card bg-dark border-secondary mb-3';
             reviewItem.innerHTML = `
-                <h3 class="font-semibold text-lg text-white mb-3">
-                    ${index + 1}. ${question.questionText}
-                </h3>
-                <ul class="space-y-2 text-sm">
-                    ${optionsHTML}
-                </ul>
+                <div class="card-body">
+                    <h5 class="card-title mb-3 text-light">
+                        ${index + 1}. ${question.questionText} <span class="badge bg-secondary ms-2">${type}</span>
+                    </h5>
+                    ${contentHTML}
+                </div>
             `;
             reviewList.appendChild(reviewItem);
         });
@@ -1007,96 +1432,111 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- TOC MODAL LOGIC ---
 
-    // --- MODIFIED: renderTocModal (Uses new helper) ---
     function renderTocModal() {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
         
-        // (rest of function is unchanged)
         const { progress, definition } = quiz;
         tocGrid.innerHTML = '';
+        
         definition.quizData.forEach((question, index) => {
             const button = document.createElement('button');
             button.textContent = index + 1;
             button.dataset.index = index;
-            button.className = 'h-10 w-10 flex items-center justify-center font-bold rounded-full transition-all';
+            button.className = 'btn btn-sm fw-bold';
+            
             const userAnswer = progress.userAnswers[index];
             const isVisited = progress.visited[index];
+            const type = question.type || 'multiple-choice';
+
             if (userAnswer !== null) {
-                if (userAnswer === question.correctAnswerIndex) {
-                    button.classList.add('bg-green-600', 'text-white');
+                let isCorrect = false;
+                
+                if (type === 'multiple-choice') {
+                    isCorrect = (userAnswer === question.correctAnswerIndex);
+                } else if (type === 'identification') {
+                    isCorrect = (userAnswer.toLowerCase() === question.correctAnswer.toLowerCase());
+                } else if (type === 'enumeration') {
+                    const normCorrect = question.correctAnswers.map(a => a.toLowerCase());
+                    const normUser = userAnswer.map(a => a.toLowerCase());
+                    let correctCount = 0;
+                    normCorrect.forEach(ca => {
+                        if(normUser.includes(ca)) correctCount++;
+                    });
+                    isCorrect = (correctCount === question.correctAnswers.length);
+                }
+
+                if (isCorrect) {
+                    button.classList.add('btn-success');
                 } else {
-                    button.classList.add('bg-red-600', 'text-white');
+                    button.classList.add('btn-danger');
                 }
             } else if (isVisited) {
-                button.classList.add('bg-yellow-600', 'text-white');
+                button.classList.add('btn-warning');
             } else {
-                button.classList.add('bg-gray-600', 'text-gray-200');
+                button.classList.add('btn-secondary');
             }
             if (index === progress.currentQuestionIndex) {
-                button.classList.add('ring-4', 'ring-blue-400');
+                button.classList.remove('btn-secondary', 'btn-success', 'btn-danger', 'btn-warning');
+                button.classList.add('btn-outline-info', 'border-2');
             }
             button.addEventListener('click', () => jumpToQuestion(index));
             tocGrid.appendChild(button);
         });
-        tocModalContainer.classList.remove('hidden');
+        tocModalContainer.classList.remove('d-none');
     }
 
     function hideTocModal() {
-        // (Unchanged)
-        tocModalContainer.classList.add('hidden');
+        tocModalContainer.classList.add('d-none');
     }
 
-    // --- MODIFIED: jumpToQuestion (Uses new helper) ---
     function jumpToQuestion(index) {
         const quiz = getCurrentQuiz();
         if (!quiz) return;
         
-        // (rest of function is unchanged)
         quiz.progress.currentQuestionIndex = index;
         updateQuizProgress();
         displayQuestion();
         hideTocModal();
     }
 
-    // --- EXTRACT MODAL LOGIC (MODIFIED) ---
+    // --- EXTRACT MODAL LOGIC ---
 
     function switchExtractTab(tab) {
-        // (Unchanged)
         currentExtractTab = tab;
         if (tab === 'json') {
-            extractTabBtnJson.classList.add('text-white', 'border-blue-500');
-            extractTabBtnJson.classList.remove('text-gray-400', 'border-transparent');
-            extractTabBtnText.classList.add('text-gray-400', 'border-transparent');
-            extractTabBtnText.classList.remove('text-white', 'border-blue-500');
-            extractTabContentJson.classList.remove('hidden');
-            extractTabContentText.classList.add('hidden');
+            extractTabBtnJson.classList.add('active');
+            extractTabBtnText.classList.remove('active');
+            extractTabContentJson.classList.remove('d-none');
+            extractTabContentText.classList.add('d-none');
         } else {
-            extractTabBtnText.classList.add('text-white', 'border-blue-500');
-            extractTabBtnText.classList.remove('text-gray-400', 'border-transparent');
-            extractTabBtnJson.classList.add('text-gray-400', 'border-transparent');
-            extractTabBtnJson.classList.remove('text-white', 'border-blue-500');
-            extractTabContentText.classList.remove('hidden');
-            extractTabContentJson.classList.add('hidden');
+            extractTabBtnText.classList.add('active');
+            extractTabBtnJson.classList.remove('active');
+            extractTabContentText.classList.remove('d-none');
+            extractTabContentJson.classList.add('d-none');
         }
     }
 
     function convertQuizDataToSimpleText(quizData) {
-        // (Unchanged)
         const textBlocks = quizData.map(question => {
-            const qText = question.questionText;
-            const optionsText = question.options.map((option, index) => {
-                if (index === question.correctAnswerIndex) {
-                    return `*${option}`;
-                }
-                return option;
-            }).join('\n');
-            return `${qText}\n${optionsText}`;
+            const type = question.type || 'multiple-choice';
+            
+            if (type === 'multiple-choice') {
+                const qText = question.questionText;
+                const optionsText = question.options.map((option, index) => {
+                    if (index === question.correctAnswerIndex) {
+                        return `*${option}`;
+                    }
+                    return option;
+                }).join('\n');
+                return `${qText}\n${optionsText}`;
+            } else {
+                return `${question.questionText}\n(This question type [${type}] cannot be fully represented in Simple Text format)`;
+            }
         });
         return textBlocks.join('\n\n');
     }
 
-    // --- MODIFIED: showExtractModal (Handles local and public) ---
     function showExtractModal(quizId) {
         let quizDefinition = null;
 
@@ -1107,11 +1547,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!quizDefinition) {
-            console.error("Could not find quiz to extract");
             return;
         }
 
-        // (rest of function is unchanged)
         switchExtractTab('json');
         extractQuizName.textContent = quizDefinition.name;
         const jsonString = JSON.stringify(quizDefinition.quizData, null, 2);
@@ -1120,24 +1558,19 @@ document.addEventListener('DOMContentLoaded', () => {
         extractTextTextarea.value = textString;
         copyJsonBtn.textContent = 'Copy JSON to Clipboard';
         copyTextBtn.textContent = 'Copy Text to Clipboard';
-        extractModalContainer.classList.remove('hidden');
+        extractModalContainer.classList.remove('d-none');
     }
 
     function hideExtractModal() {
-        // (Unchanged)
-        extractModalContainer.classList.add('hidden');
+        extractModalContainer.classList.add('d-none');
     }
 
     function copyToClipboard(textarea, button) {
-        // (Unchanged)
         navigator.clipboard.writeText(textarea.value).then(() => {
+            const originalText = button.textContent;
             button.textContent = 'Copied!';
             setTimeout(() => {
-                if (button.id === 'copy-json-btn') {
-                    button.textContent = 'Copy JSON to Clipboard';
-                } else {
-                    button.textContent = 'Copy Text to Clipboard';
-                }
+                button.textContent = originalText;
             }, 2000);
         }).catch(err => {
             console.error('Failed to copy: ', err);
@@ -1165,11 +1598,31 @@ document.addEventListener('DOMContentLoaded', () => {
         showScreen('list');
     }
 
-    loadNewQuizBtn.addEventListener('click', () => showScreen('setup'));
-    backToListBtn.addEventListener('click', () => showScreen('list'));
+    loadNewQuizBtn.addEventListener('click', () => {
+        resetSetupForm();
+        showScreen('setup');
+    });
+    
+    // NEW: Sort Listener
+    sortSelect.addEventListener('change', (e) => {
+        currentSort = e.target.value;
+        refreshAllLists();
+    });
+
+    // NEW: Search Listener
+    searchInput.addEventListener('input', (e) => {
+        currentSearchTerm = e.target.value.trim();
+        refreshAllLists();
+    });
+
+    backToListBtn.addEventListener('click', () => {
+        // Reset form to avoid "stuck" editing state when navigating back manually
+        resetSetupForm(); 
+        showScreen('list');
+    });
     
     quizBackToListBtn.addEventListener('click', () => {
-        updateQuizProgress(); // Save progress
+        updateQuizProgress(); 
         refreshAllLists();
     });
     
@@ -1181,7 +1634,6 @@ document.addEventListener('DOMContentLoaded', () => {
     reviewAnswersBtn.addEventListener('click', renderReviewList);
     reviewBackToResultsBtn.addEventListener('click', () => showScreen('results'));
 
-    // TOC Listeners
     showTocBtn.addEventListener('click', renderTocModal);
     closeTocBtn.addEventListener('click', hideTocModal);
     tocModalContainer.addEventListener('click', (e) => {
@@ -1191,13 +1643,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- KEYBOARD SHORTCUTS ---
-    // (Unchanged)
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
             return; 
         }
 
-        if (!tocModalContainer.classList.contains('hidden')) {
+        if (!tocModalContainer.classList.contains('d-none')) {
             if (e.key === 'Escape') {
                 e.preventDefault();
                 hideTocModal();
@@ -1205,7 +1656,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        if (!extractModalContainer.classList.contains('hidden')) {
+        if (!extractModalContainer.classList.contains('d-none')) {
             if (e.key === 'Escape') {
                 e.preventDefault();
                 hideExtractModal();
@@ -1213,13 +1664,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        if (!screenContainers.quiz.classList.contains('hidden')) {
+        if (!screenContainers.quiz.classList.contains('d-none')) {
             switch (e.key) {
                 case 'Enter':
-                    if (!nextQuestionBtn.classList.contains('hidden') && !nextQuestionBtn.disabled) {
+                    if (!nextQuestionBtn.classList.contains('d-none') && !nextQuestionBtn.disabled) {
                         e.preventDefault();
                         goToNextQuestion();
-                    } else if (!skipQuestionBtn.classList.contains('hidden') && !skipQuestionBtn.disabled) {
+                    } else if (!skipQuestionBtn.classList.contains('d-none') && !skipQuestionBtn.disabled) {
                         e.preventDefault();
                         goToNextQuestion();
                     }
@@ -1240,12 +1691,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 case '8':
                 case '9':
                     const optionIndex = parseInt(e.key) - 1;
-                    const optionButtons = optionsContainer.querySelectorAll('button');
-                    if (optionButtons.length > optionIndex && optionIndex >= 0) {
-                        const targetButton = optionButtons[optionIndex];
-                        if (targetButton && !targetButton.disabled) {
-                            e.preventDefault();
-                            targetButton.click();
+                    const optionButtons = optionsContainer.querySelectorAll('button:not(.d-none)'); 
+                    if (optionButtons.length > 0 && optionButtons[0].tagName === 'BUTTON' && !optionButtons[0].textContent.includes('Submit')) {
+                        if (optionButtons.length > optionIndex && optionIndex >= 0) {
+                            const targetButton = optionButtons[optionIndex];
+                            if (targetButton && !targetButton.disabled) {
+                                e.preventDefault();
+                                targetButton.click();
+                            }
                         }
                     }
                     break;
@@ -1253,22 +1706,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    /**
-     * Main app initialization function
-     */
     function initializeApp() {
-        // --- Check for admin mode ---
         isAdmin = new URLSearchParams(window.location.search).get('admin') === 'true';
         if (isAdmin) {
             console.log("Admin mode enabled. Public delete buttons will be visible.");
         }
         
-        loadStateFromStorage(); // Load local quizzes and all progress
-        renderLocalQuizzes(); // Render local quizzes first
-        fetchAndRenderPublicQuizzes(); // Then fetch and render public quizzes
-        showScreen('list'); // Start on the home screen
+        loadStateFromStorage(); 
+        refreshAllLists();
     }
 
-    // Start the app!
     initializeApp();
 });
