@@ -810,7 +810,9 @@ document.addEventListener('DOMContentLoaded', () => {
                        q.hasOwnProperty('correctAnswerIndex') &&
                        typeof q.correctAnswerIndex === 'number';
             } else if (type === 'identification') {
-                return q.hasOwnProperty('correctAnswer') && typeof q.correctAnswer === 'string';
+                const hasStringAnswer = q.hasOwnProperty('correctAnswer') && typeof q.correctAnswer === 'string';
+                const hasArrayAnswer = q.hasOwnProperty('correctAnswers') && Array.isArray(q.correctAnswers) && q.correctAnswers.length > 0;
+                return hasStringAnswer || hasArrayAnswer;
             } else if (type === 'enumeration') {
                 return q.hasOwnProperty('correctAnswers') && 
                        Array.isArray(q.correctAnswers) &&
@@ -1107,9 +1109,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const { progress, definition } = quiz;
         const question = definition.quizData[progress.currentQuestionIndex];
-        const correctAnswer = question.correctAnswer;
+        const validAnswers = question.correctAnswers || [question.correctAnswer];
 
-        const isCorrect = userAnswer.toLowerCase() === correctAnswer.toLowerCase();
+        const normalizedUserAnswer = userAnswer.toLowerCase().trim();
+        const isCorrect = validAnswers.some(ans => ans.toLowerCase().trim() === normalizedUserAnswer);
         if (isCorrect) progress.score++;
 
         progress.userAnswers[progress.currentQuestionIndex] = userAnswer;
@@ -1186,9 +1189,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const quiz = getCurrentQuiz();
         const { definition, progress } = quiz;
         const question = definition.quizData[progress.currentQuestionIndex];
-        const correctAnswer = question.correctAnswer;
+        const validAnswers = question.correctAnswers || [question.correctAnswer];
 
-        const isCorrect = userAnswer.toLowerCase() === correctAnswer.toLowerCase();
+        const normalizedUserAnswer = (userAnswer || '').toLowerCase().trim();
+        const isCorrect = validAnswers.some(ans => ans.toLowerCase().trim() === normalizedUserAnswer);
         const input = document.getElementById('ident-input');
         if (input) {
             input.disabled = true;
@@ -1206,7 +1210,8 @@ document.addEventListener('DOMContentLoaded', () => {
             setFeedbackText('Correct!', true);
             if (withAnimation) quizContainer.classList.add('pop');
         } else {
-            setFeedbackText(`Wrong! Correct answer: ${correctAnswer}`, false);
+            const correctAnswerText = validAnswers.join(' OR ');
+            setFeedbackText(`Wrong! Correct answer: ${correctAnswerText}`, false);
             if (withAnimation) quizContainer.classList.add('shake');
         }
 
@@ -1387,13 +1392,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     contentHTML += '</ul>';
                 
                 } else if (type === 'identification') {
-                    const isCorrect = userAnswer.toLowerCase() === question.correctAnswer.toLowerCase();
+                    const validAnswers = question.correctAnswers || [question.correctAnswer];
+                    const normalizedUserAnswer = (userAnswer || '').toLowerCase().trim();
+                    const isCorrect = validAnswers.some(ans => ans.toLowerCase().trim() === normalizedUserAnswer);
+                    const correctAnswerText = validAnswers.join(' OR ');
                     contentHTML = `
                         <div class="small">
                             <div class="${isCorrect ? 'text-success' : 'text-danger'} fw-bold">
                                 Your Answer: ${userAnswer}
                             </div>
-                            ${!isCorrect ? `<div class="text-success">Correct Answer: ${question.correctAnswer}</div>` : ''}
+                            ${!isCorrect ? `<div class="text-success">Correct Answer: ${correctAnswerText}</div>` : ''}
                         </div>
                     `;
                 } else if (type === 'enumeration') {
@@ -1455,7 +1463,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (type === 'multiple-choice') {
                     isCorrect = (userAnswer === question.correctAnswerIndex);
                 } else if (type === 'identification') {
-                    isCorrect = (userAnswer.toLowerCase() === question.correctAnswer.toLowerCase());
+                    const validAnswers = question.correctAnswers || [question.correctAnswer];
+                    const normalizedUserAnswer = (userAnswer || '').toLowerCase().trim();
+                    isCorrect = validAnswers.some(ans => ans.toLowerCase().trim() === normalizedUserAnswer);
                 } else if (type === 'enumeration') {
                     const normCorrect = question.correctAnswers.map(a => a.toLowerCase());
                     const normUser = userAnswer.map(a => a.toLowerCase());
